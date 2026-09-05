@@ -1,10 +1,14 @@
 ---
 name: Verify image
 
-# Inspects the published image and asserts the fixes are present and that
-# nothing was broken producing them. This exists because a build can go green
-# while producing a subtly wrong image - an earlier revision of build.sh
-# disabled Fedora's own repositories and nothing complained.
+# Inspects the published image and asserts the fixes are present and that we
+# have not broken anything relative to the base image.
+#
+# The repo check compares against ghcr.io/ublue-os/bazzite-nvidia-open:stable
+# rather than asserting an absolute state. An earlier build.sh disabled Fedora's
+# repositories while the build stayed green, so the guard matters - but only a
+# *divergence from base* is a fault. Bazzite may legitimately ship repos
+# disabled, and asserting otherwise just produces false alarms.
 #
 # Cheap (pull + inspect, no build), so run it after any change.
 
@@ -17,6 +21,7 @@ env:
   IMAGE_NAME: ${{ github.event.repository.name }}
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
   DEFAULT_TAG: "latest"
+  BASE_IMAGE: "ghcr.io/ublue-os/bazzite-nvidia-open:stable"
 
 jobs:
   verify:
@@ -27,14 +32,22 @@ jobs:
       packages: read
 
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: true
+
       - name: Resolve image reference
         id: ref
         run: echo "image=${IMAGE_REGISTRY,,}/${IMAGE_NAME,,}:${DEFAULT_TAG}" >> "${GITHUB_OUTPUT}"
 
-      - name: Pull image
-        run: podman pull "${{ steps.ref.outputs.image }}"
+      - name: Pull images
+        run: |
+          set -euxo pipefail
+          podman pull "${{ steps.ref.outputs.image }}"
+          podman pull "${BASE_IMAGE}"
 
-      - name: Verify image contents
+      - name: Verify our additions are present
         run: |
           set -euo pipefail
           cat > /tmp/verify.sh <<'VERIFY'
@@ -42,7 +55,7 @@ jobs:
           fails=0
           ok()   { printf '  [ok]   %s\n' "$*"; }
           bad()  { printf '  [FAIL] %s\n' "$*"; fails=$((fails+1)); }
-          skip() { printf '  [--]   %s\n' "$*"; }
+          info() { printf '  [--]   %s\n' "$*"; }
           check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
           echo "=== hardware fix files ==="
@@ -51,7 +64,6 @@ jobs:
           check "nvidia modprobe conf"         'test -f /usr/lib/modprobe.d/nvidia-rtx3080.conf'
           check "broadcom modprobe conf"       'test -f /usr/lib/modprobe.d/broadcom-bcm4366.conf'
           check "AC88 firmware blob"           'test -f /usr/share/bazzite-hw-fixes/firmware/brcmfmac4366c-pcie.bin.ac88u'
-          check "stock brcmfmac firmware"      'test -f /usr/lib/firmware/brcm/brcmfmac4366c-pcie.bin'
           check "samsung EDID"                 'test -f /usr/lib/firmware/edid/samsung-g91sd-base.bin'
           check "g9-display executable"        'test -x /usr/bin/g9-display'
           check "broadcom-wifi-fix executable" 'test -x /usr/bin/broadcom-wifi-fix'
@@ -62,15 +74,12 @@ jobs:
             check "bash -n $s" "bash -n /usr/bin/$s"
           done
 
-          echo "=== REGRESSION GUARD: distro repos must stay enabled ==="
-          for r in fedora fedora-updates terra terra-mesa terra-extras; do
-            f="/etc/yum.repos.d/${r}.repo"
-            if [ -f "$f" ]; then
-              if grep -q '^enabled *= *0' "$f"; then bad "${r}.repo is DISABLED"; else ok "${r}.repo enabled"; fi
-            else
-              skip "${r}.repo not present in base image"
-            fi
-          done
+          echo "=== stock Broadcom firmware (informational) ==="
+          if [ -f /usr/lib/firmware/brcm/brcmfmac4366c-pcie.bin ]; then
+            info "stock brcmfmac4366c-pcie.bin present - AC88 override is a fallback"
+          else
+            info "stock brcmfmac4366c-pcie.bin ABSENT - the AC88 override is REQUIRED for any chance of wifi"
+          fi
 
           echo "=== declared kernel arguments ==="
           grep -E '^\s*"' /usr/lib/bootc/kargs.d/10-rog-x570-rtx3080.toml | tr -d ' ",' | sed 's/^/  /'
@@ -78,14 +87,36 @@ jobs:
           echo "=== declared root filesystem ==="
           grep -A1 'filesystem.root' /usr/lib/bootc/install/50-bazzite-mattsumoto.toml | sed 's/^/  /'
 
-          echo "=== nvidia packages ==="
-          rpm -qa 2>/dev/null | grep -iE '^(nvidia|kmod-nvidia)' | sort | sed 's/^/  /' || skip "rpm query unavailable"
-
           echo
           if [ "$fails" -ne 0 ]; then echo "FAILED CHECKS: $fails"; exit 1; fi
-          echo "All checks passed."
+          echo "Additions verified."
           VERIFY
-          chmod +x /tmp/verify.sh
-          podman run --rm --entrypoint "" \
-            -v /tmp/verify.sh:/verify.sh:ro,z \
+          podman run --rm --entrypoint "" -v /tmp/verify.sh:/verify.sh:ro,z \
             "${{ steps.ref.outputs.image }}" /usr/bin/bash /verify.sh
+
+      - name: Compare repo state against the base image
+        run: |
+          set -euo pipefail
+          dump() {
+            podman run --rm --entrypoint "" "$1" /usr/bin/bash -c '
+              for f in /etc/yum.repos.d/*.repo; do
+                [ -e "$f" ] || continue
+                # First enabled= line per file is a good enough proxy for the file state.
+                state=$(grep -m1 -E "^enabled *=" "$f" | tr -d " " || echo "enabled=unset")
+                printf "%s %s\n" "$(basename "$f")" "$state"
+              done | sort'
+          }
+          dump "${{ steps.ref.outputs.image }}" > /tmp/ours.txt
+          dump "${BASE_IMAGE}"                  > /tmp/base.txt
+
+          echo "=== base image repo states (for reference) ==="
+          sed 's/^/  /' /tmp/base.txt
+          echo
+          echo "=== diff: base vs ours ==="
+          if diff -u /tmp/base.txt /tmp/ours.txt; then
+            echo "  identical to base - our layer altered no repository"
+          else
+            echo
+            echo "FAIL: our layer changed repository state relative to the base image."
+            exit 1
+          fi
