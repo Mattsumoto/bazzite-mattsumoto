@@ -1,0 +1,71 @@
+#!/usr/bin/bash
+# broadcom-wifi-fix - swap in alternative BCM4366 firmware for the ASUS PCE-AC88.
+#
+# Fedora ships brcmfmac4366c-pcie.bin, but the PCE-AC88 frequently fails to
+# initialise with it (missing device-specific NVRAM, DMA errors). This toggles a
+# router-derived AC88 firmware image in via /var/lib/firmware, which the kernel
+# searches first thanks to firmware_class.path set in our kernel arguments.
+#
+# /usr is read-only on bootc, so /var is the only writable override point.
+set -euo pipefail
+
+ALT="/usr/share/bazzite-hw-fixes/firmware/brcmfmac4366c-pcie.bin.ac88u"
+DEST_DIR="/var/lib/firmware/brcm"
+DEST="$DEST_DIR/brcmfmac4366c-pcie.bin"
+
+need_root() { [ "$(id -u)" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }; }
+
+reload() {
+    modprobe -r brcmfmac 2>/dev/null || true
+    modprobe brcmfmac 2>/dev/null || true
+}
+
+usage() {
+    echo "broadcom-wifi-fix - ASUS PCE-AC88 (BCM4366) firmware helper"
+    echo
+    echo "  sudo broadcom-wifi-fix enable    try the AC88-specific firmware"
+    echo "  sudo broadcom-wifi-fix disable   revert to the stock Fedora firmware"
+    echo "  broadcom-wifi-fix status         show device, override state, kernel log"
+    echo
+    echo "NOTE: This chip is poorly supported on Linux and may not work regardless."
+    echo "An Intel AX210 PCIe card (~GBP 20) works with no configuration at all and"
+    echo "is the reliable fix. The Intel I211 ethernet works out of the box either way."
+}
+
+case "${1:-status}" in
+  enable)
+    need_root
+    [ -f "$ALT" ] || { echo "Alternative firmware missing: $ALT" >&2; exit 1; }
+    install -D -m 0644 "$ALT" "$DEST"
+    echo ":: installed AC88 firmware to $DEST"
+    reload
+    echo ":: brcmfmac reloaded. Check with: broadcom-wifi-fix status"
+    ;;
+  disable)
+    need_root
+    rm -f "$DEST"
+    echo ":: removed override, back to stock firmware"
+    reload
+    ;;
+  status)
+    echo "=== PCI network devices ==="
+    lspci -nnk | grep -A3 -iE 'network|wireless|ethernet' || echo "(none found)"
+    echo
+    echo "=== firmware override ==="
+    if [ -f "$DEST" ]; then
+        echo "ACTIVE  -> $DEST"
+    else
+        echo "inactive (using stock firmware)"
+    fi
+    echo "search path: $(cat /sys/module/firmware_class/parameters/path 2>/dev/null || echo unset)"
+    echo
+    echo "=== interfaces ==="
+    ip -br link | grep -vE '^(lo|docker|veth|virbr)' || true
+    echo
+    echo "=== recent brcmfmac kernel messages ==="
+    journalctl -k --no-pager 2>/dev/null | grep -i brcmfmac | tail -20 || echo "(no brcmfmac messages)"
+    ;;
+  *)
+    usage
+    ;;
+esac

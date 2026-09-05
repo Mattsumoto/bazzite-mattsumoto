@@ -1,0 +1,104 @@
+#!/usr/bin/bash
+# g9-display - control the Samsung Odyssey OLED G9 (G91SD) on NVIDIA/Wayland.
+#
+# 5120x1440@144 on DP 1.4 needs DSC. DSC + VRR on a QD-OLED with the NVIDIA
+# driver is the well-known cause of the "white flash -> monitor off -> back on"
+# cycle. This switches between a known-stable profile and the full-rate one.
+set -euo pipefail
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+command -v kscreen-doctor >/dev/null || die "kscreen-doctor not found (are you in a Plasma session?)"
+
+PARSER='
+import json, sys
+want = sys.argv[1] if len(sys.argv) > 1 else ""
+data = json.load(sys.stdin)
+for o in data.get("outputs", []):
+    if not o.get("connected"):
+        continue
+    modes = o.get("modes", [])
+    # The G9 is the only 5120-wide panel on this machine.
+    if not any(m.get("size", {}).get("width") == 5120 for m in modes):
+        continue
+    if not want:
+        print(o["name"])
+        sys.exit(0)
+    for m in modes:
+        s = m.get("size", {})
+        if s.get("width") != 5120 or s.get("height") != 1440:
+            continue
+        if round(float(m.get("refreshRate", 0))) == int(want):
+            print(o["name"], m["id"])
+            sys.exit(0)
+    sys.exit(3)
+sys.exit(4)
+'
+
+# Prints "<output-name>" or, when given a refresh rate, "<output-name> <mode-id>".
+find_output() {
+    kscreen-doctor -j | python3 -c "$PARSER" "${1:-}"
+}
+
+apply() {
+    local hz="$1" vrr="$2" hdr="$3" label="$4"
+    local out mode
+    read -r out mode < <(find_output "$hz") || die "No 5120x1440@${hz} mode found on any connected output."
+    echo ":: $label  ->  $out @ ${hz}Hz, VRR=$vrr, HDR=$hdr"
+    kscreen-doctor "output.${out}.mode.${mode}"
+    kscreen-doctor "output.${out}.vrrpolicy.${vrr}"
+    # HDR control landed in Plasma 6; ignore if this build lacks it.
+    kscreen-doctor "output.${out}.hdr.${hdr}" 2>/dev/null \
+        || echo "   (HDR toggle unsupported on this Plasma build, skipped)"
+    echo ":: done"
+}
+
+usage() {
+    echo "g9-display - Samsung Odyssey OLED G9 helper"
+    echo
+    echo "  g9-display safe      120Hz, VRR off, HDR off   <- use this if the screen flickers"
+    echo "  g9-display full      144Hz, VRR auto, HDR on"
+    echo "  g9-display vrr on|off"
+    echo "  g9-display hdr on|off"
+    echo "  g9-display status    show detected output and current config"
+    echo "  g9-display list      raw kscreen-doctor output"
+    echo
+    echo "If the panel is unstable, run 'g9-display safe'. If that fixes it, reintroduce"
+    echo "VRR first ('g9-display vrr on'), then 144Hz, to find which one your link holds."
+}
+
+case "${1:-status}" in
+  safe)
+    # 120Hz fits DP 1.4 HBR3 more comfortably than 144; VRR and HDR off.
+    apply 120 never disable "Safe profile"
+    ;;
+  full)
+    apply 144 automatic enable "Full profile"
+    ;;
+  vrr)
+    out="$(find_output)" || die "G9 not found."
+    case "${2:-}" in
+      on)  kscreen-doctor "output.${out}.vrrpolicy.automatic"; echo "VRR: automatic" ;;
+      off) kscreen-doctor "output.${out}.vrrpolicy.never";     echo "VRR: never" ;;
+      *)   die "usage: g9-display vrr on|off" ;;
+    esac
+    ;;
+  hdr)
+    out="$(find_output)" || die "G9 not found."
+    case "${2:-}" in
+      on)  kscreen-doctor "output.${out}.hdr.enable";  echo "HDR: on" ;;
+      off) kscreen-doctor "output.${out}.hdr.disable"; echo "HDR: off" ;;
+      *)   die "usage: g9-display hdr on|off" ;;
+    esac
+    ;;
+  list)
+    kscreen-doctor -o
+    ;;
+  status)
+    out="$(find_output)" || die "G9 not detected as connected."
+    echo "Odyssey G9 is output: $out"
+    kscreen-doctor -o
+    ;;
+  *)
+    usage
+    ;;
+esac

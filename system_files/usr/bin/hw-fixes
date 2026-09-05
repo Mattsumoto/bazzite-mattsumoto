@@ -1,0 +1,46 @@
+#!/usr/bin/bash
+# hw-fixes - report which of this image's hardware workarounds are actually live.
+set -uo pipefail
+
+ok()   { printf '  [ok]   %s\n' "$*"; }
+warn() { printf '  [!!]   %s\n' "$*"; }
+
+echo "Bazzite hardware-fix image (ROG STRIX X570-F / RTX 3080 / Odyssey OLED G9)"
+echo
+echo "Kernel arguments:"
+for k in nvidia_drm.modeset=1 \
+         nvidia_drm.fbdev=1 \
+         nvidia.NVreg_PreserveVideoMemoryAllocations=1 \
+         nvidia.NVreg_EnableGpuFirmware=1 \
+         swiotlb=65536 \
+         firmware_class.path=/var/lib/firmware \
+         iommu=pt; do
+    if grep -qF -- "$k" /proc/cmdline; then ok "$k"; else warn "MISSING: $k"; fi
+done
+
+echo
+echo "Graphics:"
+if lsmod | grep -q '^nvidia'; then ok "nvidia modules loaded"; else warn "nvidia modules NOT loaded"; fi
+if [ -d /sys/module/nvidia_drm ]; then ok "nvidia_drm present"; else warn "nvidia_drm absent"; fi
+echo "         session type: ${XDG_SESSION_TYPE:-unknown}"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    echo "         $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || echo 'nvidia-smi failed')"
+fi
+
+echo
+echo "Displays:"
+if command -v kscreen-doctor >/dev/null 2>&1; then
+    kscreen-doctor -o 2>/dev/null | sed 's/^/  /' || echo "  (no Wayland session)"
+else
+    echo "  (kscreen-doctor unavailable)"
+fi
+
+echo
+echo "Network:"
+ip -br link 2>/dev/null | grep -vE '^(lo|docker|veth|virbr)' | sed 's/^/  /'
+if lspci -nn 2>/dev/null | grep -q '14e4:43c3'; then
+    warn "Broadcom BCM4366 (PCE-AC88) present - see: broadcom-wifi-fix status"
+fi
+
+echo
+echo "Helpers:  g9-display   broadcom-wifi-fix   hw-fixes"

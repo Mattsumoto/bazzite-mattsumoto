@@ -1,0 +1,33 @@
+# Hardware-specific kernel arguments
+# Target: ASUS ROG STRIX X570-F GAMING / Ryzen 7 5800X / RTX 3080 / Odyssey OLED G9
+#
+# bootc reads every *.toml here and applies the diff to the bootloader on update,
+# so these survive `bootc upgrade` without touching machine-local kargs.
+
+kargs = [
+  # --- NVIDIA RTX 3080 (GA102, open kernel modules) ---
+  # DRM modesetting + framebuffer handoff. Without fbdev the console-to-Wayland
+  # transition on a DSC link is a common source of the white-flash/blank cycle.
+  "nvidia_drm.modeset=1",
+  "nvidia_drm.fbdev=1",
+  # Preserve VRAM across suspend/resume. Prevents corrupted or dead output on wake.
+  "nvidia.NVreg_PreserveVideoMemoryAllocations=1",
+  # GSP firmware is mandatory on the open modules; state it explicitly.
+  "nvidia.NVreg_EnableGpuFirmware=1",
+
+  # --- Broadcom BCM4366 (ASUS PCE-AC88) ---
+  # brcmfmac on this chip exhausts the default 64MB swiotlb bounce buffer and
+  # fails with "swiotlb buffer is full" / "dma_map_single failed". 128MB of
+  # headroom is the documented mitigation. Costs 128MB of 32GB.
+  "swiotlb=65536",
+
+  # Let /var/lib/firmware override image firmware at runtime. /usr is read-only on
+  # bootc, so this is the only way to swap a firmware blob without rebuilding the
+  # image. Harmless when the directory is empty. Used by `broadcom-wifi-fix`.
+  "firmware_class.path=/var/lib/firmware",
+
+  # --- AMD X570 ---
+  # IOMMU passthrough for trusted devices: avoids translation overhead and
+  # reduces bounce-buffer pressure. No-op if IOMMU is disabled in BIOS.
+  "iommu=pt",
+]
