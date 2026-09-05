@@ -1,0 +1,91 @@
+---
+name: Verify image
+
+# Inspects the published image and asserts the fixes are present and that
+# nothing was broken producing them. This exists because a build can go green
+# while producing a subtly wrong image - an earlier revision of build.sh
+# disabled Fedora's own repositories and nothing complained.
+#
+# Cheap (pull + inspect, no build), so run it after any change.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 6 * * 1'   # Mondays, to catch upstream drift
+
+env:
+  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
+  DEFAULT_TAG: "latest"
+
+jobs:
+  verify:
+    name: Verify image contents
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Resolve image reference
+        id: ref
+        run: echo "image=${IMAGE_REGISTRY,,}/${IMAGE_NAME,,}:${DEFAULT_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Pull image
+        run: podman pull "${{ steps.ref.outputs.image }}"
+
+      - name: Verify image contents
+        run: |
+          set -euo pipefail
+          cat > /tmp/verify.sh <<'VERIFY'
+          #!/usr/bin/bash
+          fails=0
+          ok()   { printf '  [ok]   %s\n' "$*"; }
+          bad()  { printf '  [FAIL] %s\n' "$*"; fails=$((fails+1)); }
+          skip() { printf '  [--]   %s\n' "$*"; }
+          check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
+
+          echo "=== hardware fix files ==="
+          check "kargs.d present"              'test -f /usr/lib/bootc/kargs.d/10-rog-x570-rtx3080.toml'
+          check "rootfs declaration present"   'test -f /usr/lib/bootc/install/50-bazzite-mattsumoto.toml'
+          check "nvidia modprobe conf"         'test -f /usr/lib/modprobe.d/nvidia-rtx3080.conf'
+          check "broadcom modprobe conf"       'test -f /usr/lib/modprobe.d/broadcom-bcm4366.conf'
+          check "AC88 firmware blob"           'test -f /usr/share/bazzite-hw-fixes/firmware/brcmfmac4366c-pcie.bin.ac88u'
+          check "stock brcmfmac firmware"      'test -f /usr/lib/firmware/brcm/brcmfmac4366c-pcie.bin'
+          check "samsung EDID"                 'test -f /usr/lib/firmware/edid/samsung-g91sd-base.bin'
+          check "g9-display executable"        'test -x /usr/bin/g9-display'
+          check "broadcom-wifi-fix executable" 'test -x /usr/bin/broadcom-wifi-fix'
+          check "hw-fixes executable"          'test -x /usr/bin/hw-fixes'
+
+          echo "=== helper scripts are syntactically valid ==="
+          for s in g9-display broadcom-wifi-fix hw-fixes; do
+            check "bash -n $s" "bash -n /usr/bin/$s"
+          done
+
+          echo "=== REGRESSION GUARD: distro repos must stay enabled ==="
+          for r in fedora fedora-updates terra terra-mesa terra-extras; do
+            f="/etc/yum.repos.d/${r}.repo"
+            if [ -f "$f" ]; then
+              if grep -q '^enabled *= *0' "$f"; then bad "${r}.repo is DISABLED"; else ok "${r}.repo enabled"; fi
+            else
+              skip "${r}.repo not present in base image"
+            fi
+          done
+
+          echo "=== declared kernel arguments ==="
+          grep -E '^\s*"' /usr/lib/bootc/kargs.d/10-rog-x570-rtx3080.toml | tr -d ' ",' | sed 's/^/  /'
+
+          echo "=== declared root filesystem ==="
+          grep -A1 'filesystem.root' /usr/lib/bootc/install/50-bazzite-mattsumoto.toml | sed 's/^/  /'
+
+          echo "=== nvidia packages ==="
+          rpm -qa 2>/dev/null | grep -iE '^(nvidia|kmod-nvidia)' | sort | sed 's/^/  /' || skip "rpm query unavailable"
+
+          echo
+          if [ "$fails" -ne 0 ]; then echo "FAILED CHECKS: $fails"; exit 1; fi
+          echo "All checks passed."
+          VERIFY
+          chmod +x /tmp/verify.sh
+          podman run --rm --entrypoint "" \
+            -v /tmp/verify.sh:/verify.sh:ro,z \
+            "${{ steps.ref.outputs.image }}" /usr/bin/bash /verify.sh
