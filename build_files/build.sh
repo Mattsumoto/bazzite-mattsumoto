@@ -37,42 +37,13 @@ else
     echo "NOTE: stock brcmfmac4366c-pcie.bin absent; the AC88 override will be required"
 fi
 
-### 5. Repair repository definitions that advertise a missing GPG key.
-#
-# bootc-image-builder depsolves against the image's own repo configuration when
-# building an Anaconda ISO, and aborts outright on a dangling file:// gpgkey:
-#   RepoError: Failed to retrieve GPG key for repo 'terra-mesa':
-#   Couldn't open file /etc/pki/rpm-gpg/RPM-GPG-KEY-terra44-mesa
-# Bazzite itself never trips this because its ISOs are built with titanoboa,
-# which does not depsolve. A repo whose key is absent cannot be used for signed
-# installs anyway, so disabling it loses nothing and unblocks the ISO build.
-#
-# Audit everything and print it, then disable only what is actually broken.
-
-echo "=== GPG keys present in the image ==="
-ls -1 /etc/pki/rpm-gpg/ 2>/dev/null || echo "(no /etc/pki/rpm-gpg)"
-
-echo "=== auditing repo definitions ==="
-shopt -s nullglob
-for repo in /etc/yum.repos.d/*.repo; do
-    missing=""
-    while IFS= read -r line; do
-        # A gpgkey= line may list several space-separated URLs.
-        for url in ${line#gpgkey=}; do
-            case "$url" in
-                file://*) path="${url#file://}"
-                          [ -f "$path" ] || missing="$missing $path" ;;
-            esac
-        done
-    done < <(grep -h '^gpgkey=' "$repo" 2>/dev/null || true)
-
-    if [ -n "$missing" ]; then
-        echo "  DISABLING $(basename "$repo") - missing key(s):$missing"
-        sed -i 's/^enabled[[:space:]]*=[[:space:]]*1/enabled=0/' "$repo"
-    else
-        echo "  ok $(basename "$repo")"
-    fi
-done
-shopt -u nullglob
+### 5. NOTE: an earlier revision audited /etc/yum.repos.d for dangling
+###    file:// GPG keys, to satisfy bootc-image-builder's depsolve step.
+###    That check was wrong twice over: gpgkey paths legitimately contain
+###    unexpanded DNF variables ($releasever, $basearch), and /etc/pki is
+###    empty at build time because bootc materialises /etc from /usr/etc
+###    only at deploy. It therefore disabled Fedora's own repositories.
+###    The ISO is built with titanoboa now, which does not depsolve at all,
+###    so no repo rewriting is needed. Do not reintroduce it.
 
 echo "Custom hardware-fix layer built successfully."

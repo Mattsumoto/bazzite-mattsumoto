@@ -53,6 +53,14 @@ jobs:
       - name: Show free space before build
         run: df -h /
 
+      # Titanoboa mounts the image from local container storage rather than
+      # pulling it, and fails with `image not known` if it is not already there.
+      - name: Pull image into local storage
+        run: |
+          set -euo pipefail
+          podman pull "${{ steps.ref.outputs.image }}"
+          podman images
+
       - name: Build ISO
         id: build
         uses: ublue-os/titanoboa@main
