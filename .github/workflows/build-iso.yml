@@ -53,13 +53,18 @@ jobs:
       - name: Show free space before build
         run: df -h /
 
-      # Titanoboa mounts the image from local container storage rather than
-      # pulling it, and fails with `image not known` if it is not already there.
-      - name: Pull image into local storage
+      # Titanoboa mounts the image rather than pulling it:
+      #   sudo podman run ... --mount type=image,source="$TITANOBOA_CTR_IMAGE"
+      # Because that runs under sudo, the image must be in ROOT's container
+      # storage. A rootless `podman pull` lands in the runner user's store,
+      # which root cannot see, and titanoboa fails with `image not known`.
+      # Pull only as root - the image is ~13 GB and pulling twice wastes disk.
+      - name: Pull image into root container storage
         run: |
           set -euo pipefail
-          podman pull "${{ steps.ref.outputs.image }}"
-          podman images
+          sudo podman pull "${{ steps.ref.outputs.image }}"
+          sudo podman images
+          df -h /
 
       - name: Build ISO
         id: build
