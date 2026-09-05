@@ -123,6 +123,19 @@ The template ships `build-disk.yml`, which uses `bootc-image-builder`. That path
 
 `build-iso.yml` uses titanoboa for that reason. `build-disk.yml` is left in place for qcow2/raw disk images, which do still work.
 
+### The two images
+
+Titanoboa does not convert this image into an ISO. A live ISO needs a *second*, separate image — the environment you actually boot into from the USB — carrying a `dracut-live` initramfs, livesys-scripts, EFI cdboot support and the payload image embedded inside it. `installer/` is that build, ported from [Bazzite's own installer](https://github.com/ublue-os/bazzite/tree/main/installer).
+
+| | |
+|---|---|
+| `BASE_IMAGE` | the live environment booted from USB |
+| `INSTALL_IMAGE_PAYLOAD` | what the installer writes to disk |
+
+Bazzite uses a plain non-NVIDIA image as its live runtime, since one runtime serves every variant. This build uses our NVIDIA image for **both**, deliberately: the ISO targets one machine whose RTX 3080 drives a 5120×1440 DSC panel, and nouveau copes with that far worse than nvidia-open. The NVIDIA kernel arguments are repeated in `installer/iso.yaml` so the G9 is stable *during installation* — kargs in `kargs.d` only apply to the installed system and do nothing for the installer.
+
+The boot menu offers a **safe graphics** entry (`nomodeset`). If the G9 flickers or stays black at the boot menu, use it — it is ugly but reliable enough to get through the install.
+
 Image signing is optional — it is skipped automatically unless you add a `SIGNING_SECRET` repository secret.
 
 ### Writing the USB

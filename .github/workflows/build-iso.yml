@@ -1,14 +1,22 @@
 ---
 name: Build live ISO
 
-# Builds a live ISO with titanoboa - the same tool Bazzite uses for its own
-# ISOs. This replaced bootc-image-builder's anaconda-iso path, which repeatedly
-# failed on Bazzite images: bib depsolves against the image's repo config at
-# build time, so it trips over third-party repos (Terra) and needs a declared
-# root filesystem, neither of which upstream Bazzite has to care about.
+# Builds a live installer ISO with titanoboa, mirroring how Bazzite builds its
+# own (ublue-os/bazzite/.github/workflows/build_iso.yml).
 #
-# Titanoboa consumes the already-published container image, so nothing here
-# depends on package resolution.
+# Two images are involved and they are not the same thing:
+#   BASE_IMAGE            - the live environment you boot into from the USB
+#   INSTALL_IMAGE_PAYLOAD - the image written to disk by the installer
+#
+# Bazzite uses a plain (non-NVIDIA) desktop image as the live runtime because
+# one runtime serves every variant. We deliberately use our own NVIDIA image for
+# both: this ISO targets a single machine with an RTX 3080 driving a 5120x1440
+# DSC panel, and nouveau handles that far worse than nvidia-open does. The point
+# of the exercise is that the installer itself displays correctly.
+#
+# bootc-image-builder cannot build ISOs from Bazzite images - it depsolves at
+# build time and trips over Bazzite's third-party repos - which is why this
+# exists rather than the template's build-disk.yml.
 
 on:
   workflow_dispatch:
@@ -32,12 +40,28 @@ jobs:
       packages: read
 
     steps:
-      # The image is several GB and the ISO larger still; the default runner
-      # does not have room for both without clearing the preinstalled toolchains.
-      - name: Maximize build space
-        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
-          extra-squeeze: true
+          tool-cache: true
+
+      # The live image embeds the full payload image, so container storage far
+      # exceeds a stock runner's disk. Bazzite solves this with a compressed
+      # btrfs loopback; without it the build dies on ENOSPC partway through.
+      - name: Mount container storage on a btrfs loopback
+        run: |
+          set -euxo pipefail
+          sudo truncate -s 110G /mnt/podman-storage.img
+          sudo mkfs.btrfs -f -m single -d single /mnt/podman-storage.img
+          sudo podman system reset --force
+          sudo systemctl stop podman.service || true
+          LOOP=$(sudo losetup --find --show --direct-io=on /mnt/podman-storage.img)
+          sudo mkdir -p /mnt/podman-storage
+          sudo mount -o compress-force=zstd:2,discard=async,noatime "$LOOP" /mnt/podman-storage
+          sudo mkdir -p /mnt/podman-storage/storage /mnt/podman-storage/tmp
+          sudo mount --bind /mnt/podman-storage/storage /var/lib/containers/storage
+          sudo systemctl start podman.service || true
+          df -h /mnt/podman-storage
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -46,43 +70,51 @@ jobs:
         id: ref
         run: |
           set -euo pipefail
-          # Container registries reject uppercase; the repo owner may contain it.
+          # Registries reject uppercase; the repo owner may contain it.
           echo "image=${IMAGE_REGISTRY,,}/${IMAGE_NAME,,}:${DEFAULT_TAG}" >> "${GITHUB_OUTPUT}"
-          echo "iso_name=${IMAGE_NAME,,}-$(date +%Y%m%d).iso" >> "${GITHUB_OUTPUT}"
+          echo "iso_name=${IMAGE_NAME,,}-$(date +%Y%m%d)-live-amd64.iso" >> "${GITHUB_OUTPUT}"
 
-      - name: Show free space before build
-        run: df -h /
-
-      # Titanoboa mounts the image rather than pulling it:
-      #   sudo podman run ... --mount type=image,source="$TITANOBOA_CTR_IMAGE"
-      # Because that runs under sudo, the image must be in ROOT's container
-      # storage. A rootless `podman pull` lands in the runner user's store,
-      # which root cannot see, and titanoboa fails with `image not known`.
-      # Pull only as root - the image is ~13 GB and pulling twice wastes disk.
-      - name: Pull image into root container storage
+      # sys_admin + label=disable are required: build.sh remounts /proc/sys and
+      # runs podman inside the build to embed the payload image.
+      - name: Build installer image
         run: |
-          set -euo pipefail
-          sudo podman pull "${{ steps.ref.outputs.image }}"
-          sudo podman images
-          df -h /
+          set -euxo pipefail
+          sudo env TMPDIR=/mnt/podman-storage/tmp podman build \
+            --cap-add sys_admin \
+            --security-opt label=disable \
+            --build-arg BASE_IMAGE="${{ steps.ref.outputs.image }}" \
+            --build-arg INSTALL_IMAGE_PAYLOAD="${{ steps.ref.outputs.image }}" \
+            --build-arg FLATPAK_DIR_SHORTNAME="kde_flatpaks" \
+            -t localhost/payload:latest installer/
 
+      - name: Show disk usage
+        if: always()
+        run: |
+          sudo df -h
+          sudo du -sh /mnt/podman-storage.img || true
+
+      # Titanoboa mounts the image with `sudo podman --mount type=image`, so it
+      # must live in root's storage - which it does, having just been built with
+      # sudo podman build above.
+      #
+      # Bazzite currently pins Zeglius/titanoboa@revamp-pr. We use the canonical
+      # action; our installer/ tree satisfies its documented iso.yaml contract
+      # (label + grub2.entries). Switch to the fork if this regresses.
       - name: Build ISO
         id: build
         uses: ublue-os/titanoboa@main
         with:
-          image-ref: ${{ steps.ref.outputs.image }}
+          image-ref: localhost/payload:latest
           iso-dest: ${{ github.workspace }}/${{ steps.ref.outputs.iso_name }}
 
       - name: Checksum
-        id: sum
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
           iso="${{ steps.ref.outputs.iso_name }}"
           test -f "${iso}"
-          sha256sum "${iso}" > "${iso}.sha256"
           ls -lh "${iso}"
-          cat "${iso}.sha256"
+          sha256sum "${iso}" | tee "${iso}-CHECKSUM"
 
       - name: Upload ISO
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -90,9 +122,9 @@ jobs:
           name: ${{ steps.ref.outputs.iso_name }}
           path: |
             ${{ github.workspace }}/${{ steps.ref.outputs.iso_name }}
-            ${{ github.workspace }}/${{ steps.ref.outputs.iso_name }}.sha256
+            ${{ github.workspace }}/${{ steps.ref.outputs.iso_name }}-CHECKSUM
           if-no-files-found: error
-          # The ISO is already compressed; zipping again only costs time.
+          # Already compressed; re-zipping only costs time on a multi-GB file.
           compression-level: 0
           retention-days: 7
           overwrite: true

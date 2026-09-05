@@ -1,0 +1,24 @@
+# Live ISO boot configuration, consumed by titanoboa via
+# /usr/lib/bootc-image-builder/iso.yaml inside the installer image.
+#
+# These kernel arguments apply to the LIVE ENVIRONMENT ONLY - the installer you
+# are looking at while installing. The installed system gets its arguments from
+# /usr/lib/bootc/kargs.d/ instead. They are repeated here so the Odyssey OLED G9
+# is stable during installation, not just afterwards.
+#
+# label must match root=live:CDLABEL= below, or the live root will not be found.
+
+label: "Bazzite-Live"
+grub2:
+  timeout: 10
+  default: 0
+  entries:
+    - name: "Install Bazzite (RTX 3080 / Odyssey G9 fixes)"
+      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=Bazzite-Live enforcing=0 rd.live.image nvidia_drm.modeset=1 nvidia_drm.fbdev=1 nvidia.NVreg_PreserveVideoMemoryAllocations=1 nvidia.NVreg_EnableGpuFirmware=1"
+      initrd: "/images/pxeboot/initrd.img"
+
+    # Use this if the G9 flickers, blanks or never lights up. Drops to basic
+    # graphics with no NVIDIA modesetting - ugly but reliable enough to install.
+    - name: "Install Bazzite (safe graphics - use if the screen misbehaves)"
+      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=Bazzite-Live enforcing=0 rd.live.image nomodeset"
+      initrd: "/images/pxeboot/initrd.img"
