@@ -1,0 +1,15 @@
+# Default root filesystem for `bootc install` and bootc-image-builder.
+#
+# Bazzite's upstream ISOs are produced with titanoboa, which does not need this,
+# so the stock image declares no default. bootc-image-builder does need it and
+# fails the ISO build with:
+#   error: cannot build manifest: no default root filesystem type specified in
+#   container, please use "--rootfs" to set manually
+#
+# btrfs matches Bazzite's own installer default and keeps subvolume layout and
+# snapshot behaviour consistent with a stock install.
+#
+# Filed as 50- so it takes precedence over any 00-*.toml in the base image.
+
+[install.filesystem.root]
+type = "btrfs"
