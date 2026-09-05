@@ -47,7 +47,11 @@ Mitigations applied:
 - `firmware_class.path=/var/lib/firmware` — lets firmware be overridden at runtime. `/usr` is read-only on bootc, so this is the only writable override point.
 - An AC88-specific firmware blob ships at `/usr/share/bazzite-hw-fixes/firmware/`, switched in with `broadcom-wifi-fix enable`.
 
-> **Be realistic about this one.** These mitigations may not be enough — ASUS's own position is that the card is Windows-only. An **Intel AX210** PCIe card (~£20) works with zero configuration on any modern kernel and is the reliable fix. The Intel I211 ethernet works out of the box regardless, so you are never stranded.
+> **The AC88 firmware is required, not optional.** Image verification showed that Bazzite ships **no** `brcmfmac4366c-pcie.bin` at all, so the card cannot initialise out of the box under any circumstances. `sudo broadcom-wifi-fix enable` is a mandatory step if you want to give the card a chance — it is not a fallback for when the stock firmware misbehaves, because there is no stock firmware.
+>
+> That blob comes from [an archived third-party repository](https://github.com/Hill-98/phicommk3-firmware), is unsigned, and its provenance cannot be verified. It is therefore left inactive by default rather than loaded for you. It is firmware for the Wi-Fi controller, not code run by your CPU, but that is a judgement call you should make knowingly.
+
+> **Be realistic about this one.** Even with the firmware, these mitigations may not be enough — ASUS's own position is that the card is Windows-only. An **Intel AX210** PCIe card (~£20) works with zero configuration on any modern kernel and is the reliable fix. The Intel I211 ethernet works out of the box regardless, so you are never stranded.
 
 ### 3. Platform
 
@@ -76,11 +80,12 @@ g9-display status
 ```
 If `safe` stops the flickering, reintroduce settings one at a time — VRR first, then 144 Hz — to find which one your link cannot hold.
 
-### `broadcom-wifi-fix` — the Wi-Fi fallback
+### `broadcom-wifi-fix` — required for any chance of Wi-Fi
+Bazzite ships no firmware for this chip, so the card is dead until you run `enable`.
 ```bash
 broadcom-wifi-fix status         # device, override state, kernel log
-sudo broadcom-wifi-fix enable    # try the AC88-specific firmware
-sudo broadcom-wifi-fix disable   # revert to stock
+sudo broadcom-wifi-fix enable    # install the AC88 firmware (required)
+sudo broadcom-wifi-fix disable   # remove it again
 ```
 
 ### Emergency: monitor won't display at all

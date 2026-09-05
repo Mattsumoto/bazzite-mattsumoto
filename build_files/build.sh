@@ -29,12 +29,14 @@ test -f /usr/share/bazzite-hw-fixes/firmware/brcmfmac4366c-pcie.bin.ac88u
 test -f /usr/lib/firmware/edid/samsung-g91sd-base.bin
 test -x /usr/bin/g9-display
 
-### 4. Confirm the stock Broadcom firmware is present in the base image. If it
-###    is, `broadcom-wifi-fix` is a fallback rather than the only option.
+### 4. Report whether the base image carries Broadcom 4366 firmware.
+###    Verified 2026-09-06: it does NOT. That makes `broadcom-wifi-fix enable`
+###    mandatory rather than a fallback - without it the card cannot initialise
+###    at all. Kept as a check so we notice if upstream starts shipping it.
 if [ -f /usr/lib/firmware/brcm/brcmfmac4366c-pcie.bin ]; then
-    echo "OK: stock brcmfmac4366c-pcie.bin present in base image"
+    echo "NOTE: base image now ships brcmfmac4366c-pcie.bin - the AC88 override is optional again"
 else
-    echo "NOTE: stock brcmfmac4366c-pcie.bin absent; the AC88 override will be required"
+    echo "OK (expected): no stock brcmfmac4366c-pcie.bin; AC88 override is required for wifi"
 fi
 
 ### 5. NOTE: an earlier revision audited /etc/yum.repos.d for dangling
