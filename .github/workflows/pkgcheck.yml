@@ -1,0 +1,22 @@
+name: Check packages
+on: { workflow_dispatch: }
+jobs:
+  check:
+    runs-on: ubuntu-26.04
+    permissions: { contents: read, packages: read }
+    steps:
+      - name: Check for wifi tooling in the image
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/mattsumoto/bazzite-mattsumoto-nvidia-open:latest
+          podman pull "$IMG"
+          podman run --rm --entrypoint "" "$IMG" bash -c '
+            echo "=== wifi stack packages ==="
+            for p in iwd wpa_supplicant NetworkManager NetworkManager-wifi dhcp-client iw rfkill wireless-regdb crda; do
+              if rpm -q "$p" >/dev/null 2>&1; then printf "  PRESENT  %s\n" "$(rpm -q $p)"; else printf "  ABSENT   %s\n" "$p"; fi
+            done
+            echo "=== iwd binary/unit ==="
+            ls -la /usr/libexec/iwd /usr/lib/systemd/system/iwd.service 2>/dev/null || echo "  (no iwd)"
+            echo "=== brcmfmac module params available ==="
+            modinfo -p brcmfmac 2>/dev/null | sed "s/^/  /" || echo "  (modinfo unavailable)"
+          '
