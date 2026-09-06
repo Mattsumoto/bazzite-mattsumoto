@@ -14,6 +14,18 @@ set -ouex pipefail
 ### 1. Lay down our system files (kargs, modprobe rules, firmware, helpers)
 cp -avf "/ctx/system_files"/. /
 
+### 1b. Packages.
+###
+###   iwd - the iNet Wireless Daemon, an alternative NetworkManager wifi backend
+###   to wpa_supplicant. Switching to it is a well-known fix for Broadcom cards
+###   that associate successfully but then fail during DHCP and loop, which is
+###   exactly what the PCE-AC88 does on this machine. Bazzite does not ship it,
+###   and it cannot be installed without a network - which is unhelpful when the
+###   thing being fixed IS the network. So bake it in.
+###
+### Kept deliberately minimal; everything else here is configuration only.
+dnf5 install -y iwd
+
 ### 2. Make sure the helper tools are executable regardless of how git
 ###    checked them out on the build runner.
 chmod 0755 /usr/bin/g9-display /usr/bin/broadcom-wifi-fix /usr/bin/hw-fixes
