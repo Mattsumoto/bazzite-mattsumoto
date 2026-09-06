@@ -18,7 +18,7 @@ on:
     - cron: '30 6 * * 1'   # Mondays, to catch upstream drift
 
 env:
-  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_NAME: bazzite-mattsumoto-nvidia-open  # must match image-template.env
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
   DEFAULT_TAG: "latest"
   BASE_IMAGE: "ghcr.io/ublue-os/bazzite-nvidia-open:stable"

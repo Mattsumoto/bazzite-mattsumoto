@@ -1,24 +1,30 @@
 # Live ISO boot configuration, consumed by titanoboa via
 # /usr/lib/bootc-image-builder/iso.yaml inside the installer image.
 #
-# These kernel arguments apply to the LIVE ENVIRONMENT ONLY - the installer you
-# are looking at while installing. The installed system gets its arguments from
-# /usr/lib/bootc/kargs.d/ instead. They are repeated here so the Odyssey OLED G9
-# is stable during installation, not just afterwards.
+# These entries deliberately match Bazzite's own (installer/iso.yaml upstream).
 #
-# label must match root=live:CDLABEL= below, or the live root will not be found.
+# DO NOT add nvidia_drm.modeset=1 / nvidia_drm.fbdev=1 here. An earlier revision
+# did, on the theory that it would keep the Odyssey G9 stable during install.
+# The live environment is the plain non-NVIDIA Bazzite image - it has no NVIDIA
+# kernel module - so those arguments told the kernel to hand display over to a
+# driver that never loads. Result: a completely black screen with no console,
+# and no way to install anything.
+#
+# The installed system gets its NVIDIA arguments from /usr/lib/bootc/kargs.d/,
+# which is the right place for them. If the installer flickers on the G9, use
+# the Basic Graphics entry below.
+#
+# label must match root=live:CDLABEL= below, or the live root is not found.
 
 label: "Bazzite-Live"
 grub2:
   timeout: 10
   default: 0
   entries:
-    - name: "Install Bazzite (RTX 3080 / Odyssey G9 fixes)"
-      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=Bazzite-Live enforcing=0 rd.live.image nvidia_drm.modeset=1 nvidia_drm.fbdev=1 nvidia.NVreg_PreserveVideoMemoryAllocations=1 nvidia.NVreg_EnableGpuFirmware=1"
+    - name: "Launch Bazzite Installer"
+      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=Bazzite-Live enforcing=0 rd.live.image"
       initrd: "/images/pxeboot/initrd.img"
 
-    # Use this if the G9 flickers, blanks or never lights up. Drops to basic
-    # graphics with no NVIDIA modesetting - ugly but reliable enough to install.
-    - name: "Install Bazzite (safe graphics - use if the screen misbehaves)"
+    - name: "Launch Bazzite Installer (Basic Graphics Mode)"
       linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=Bazzite-Live enforcing=0 rd.live.image nomodeset"
       initrd: "/images/pxeboot/initrd.img"

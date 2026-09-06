@@ -8,23 +8,33 @@ name: Build live ISO
 #   BASE_IMAGE            - the live environment you boot into from the USB
 #   INSTALL_IMAGE_PAYLOAD - the image written to disk by the installer
 #
-# Bazzite uses a plain (non-NVIDIA) desktop image as the live runtime because
-# one runtime serves every variant. We deliberately use our own NVIDIA image for
-# both: this ISO targets a single machine with an RTX 3080 driving a 5120x1440
-# DSC panel, and nouveau handles that far worse than nvidia-open does. The point
-# of the exercise is that the installer itself displays correctly.
+# The live runtime MUST be the plain, non-NVIDIA Bazzite image. Bazzite strips
+# -nvidia/-nvidia-open from the ref for exactly this reason:
+#
+#   # We need this as we use the desktop image as the runtime for the livecds.
+#   ref="${ref/-nvidia-open/}"
+#
+# A previous revision used our NVIDIA image as the live runtime, reasoning that
+# the installer would then display correctly on a DSC panel. It produced a live
+# session that booted to a permanently black screen with no console: the NVIDIA
+# kernel module does not come up in the live overlay, so with nvidia_drm.modeset
+# set, KMS never initialises and nothing is ever drawn. Do not "improve" this
+# back - the installer's display fix belongs in installer/iso.yaml, and the
+# installed system gets its NVIDIA arguments from kargs.d.
 #
 # bootc-image-builder cannot build ISOs from Bazzite images - it depsolves at
-# build time and trips over Bazzite's third-party repos - which is why this
-# exists rather than the template's build-disk.yml.
+# build time and trips over Bazzite's third-party repos - so titanoboa is the
+# only ISO path here.
 
 on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_NAME: bazzite-mattsumoto-nvidia-open  # must match image-template.env
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
   DEFAULT_TAG: "latest"
+  # The live environment. Plain Bazzite, no NVIDIA driver - see the note above.
+  LIVE_BASE_IMAGE: "ghcr.io/ublue-os/bazzite:stable"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
@@ -82,7 +92,7 @@ jobs:
           sudo env TMPDIR=/mnt/podman-storage/tmp podman build \
             --cap-add sys_admin \
             --security-opt label=disable \
-            --build-arg BASE_IMAGE="${{ steps.ref.outputs.image }}" \
+            --build-arg BASE_IMAGE="${LIVE_BASE_IMAGE}" \
             --build-arg INSTALL_IMAGE_PAYLOAD="${{ steps.ref.outputs.image }}" \
             --build-arg FLATPAK_DIR_SHORTNAME="kde_flatpaks" \
             -t localhost/payload:latest installer/

@@ -137,9 +137,22 @@ Titanoboa does not convert this image into an ISO. A live ISO needs a *second*, 
 | `BASE_IMAGE` | the live environment booted from USB |
 | `INSTALL_IMAGE_PAYLOAD` | what the installer writes to disk |
 
-Bazzite uses a plain non-NVIDIA image as its live runtime, since one runtime serves every variant. This build uses our NVIDIA image for **both**, deliberately: the ISO targets one machine whose RTX 3080 drives a 5120×1440 DSC panel, and nouveau copes with that far worse than nvidia-open. The NVIDIA kernel arguments are repeated in `installer/iso.yaml` so the G9 is stable *during installation* — kargs in `kargs.d` only apply to the installed system and do nothing for the installer.
+The live runtime is plain `ghcr.io/ublue-os/bazzite:stable` — **not** our NVIDIA image. Bazzite strips `-nvidia-open` from the ref for the livecd runtime, and that is not an arbitrary choice.
 
-The boot menu offers a **safe graphics** entry (`nomodeset`). If the G9 flickers or stays black at the boot menu, use it — it is ugly but reliable enough to get through the install.
+> An earlier revision of this repo used the NVIDIA image as the live runtime, on the theory that the installer would then render correctly on a DSC panel. The result was a live session that booted to a permanently black screen with no console: the NVIDIA kernel module does not initialise inside the live overlay, so with `nvidia_drm.modeset=1` set, KMS never comes up and nothing is drawn. `installer/iso.yaml` carries a comment saying not to reintroduce those arguments there.
+
+So the installer runs on the generic driver stack, and the NVIDIA fixes apply to the installed system via `kargs.d`. If the G9 misbehaves at the installer, use the **Basic Graphics Mode** boot entry.
+
+### Image naming
+
+The image is called `bazzite-mattsumoto-nvidia-open`, and the suffix is load-bearing. Bazzite's live-session hardware helper (`on_gui_login.sh`) classifies the payload by **name**:
+
+```bash
+if [[ $image_name == *-nvidia-open* ]]; then image="nvidia-desktop"
+else                                         image="amd_intel"
+```
+
+Anything without that suffix is treated as an AMD/Intel image, so on NVIDIA hardware the installer raises a spurious **WRONG IMAGE DETECTED** warning. The name is accurate — this is a `bazzite-nvidia-open` derivative — so this is a fix rather than a workaround.
 
 Image signing is optional — it is skipped automatically unless you add a `SIGNING_SECRET` repository secret.
 
